@@ -41,14 +41,13 @@ Check the LICENSE file for details.
 #![doc(html_root_url = "https://docs.rs/juniper_actix/0.1.0")]
 
 use actix_web::{
-    error::{ErrorBadRequest, ErrorMethodNotAllowed, ErrorUnsupportedMediaType},
-    http::Method,
-    web, Error, FromRequest, HttpMessage, HttpRequest, HttpResponse,
+    error::{ErrorBadRequest, ErrorMethodNotAllowed, ErrorUnsupportedMediaType}, Error, FromRequest,
+    http::Method, http::StatusCode, HttpMessage, HttpRequest, HttpResponse, web,
 };
 use juniper::{
     http::{
-        graphiql::graphiql_source, playground::playground_source, GraphQLBatchRequest,
-        GraphQLRequest,
+        graphiql::graphiql_source, GraphQLBatchRequest, GraphQLRequest,
+        playground::playground_source,
     },
     ScalarValue,
 };
@@ -122,7 +121,11 @@ where
     let get_req = web::Query::<GetGraphQLRequest>::from_query(req.query_string())?;
     let req = GraphQLRequest::from(get_req.into_inner());
     let gql_response = req.execute(schema, context).await;
-    let body_response = serde_json::to_string(&gql_response)?;
+    let body_response = serde_json::to_string(&gql_response)
+        .map_err(|e| actix_web::error::InternalError::new(
+            format!("error serializing response body: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))?;
     let mut response = match gql_response.is_ok() {
         true => HttpResponse::Ok(),
         false => HttpResponse::BadRequest(),
@@ -165,7 +168,11 @@ where
         )),
     }?;
     let gql_batch_response = req.execute(schema, context).await;
-    let gql_response = serde_json::to_string(&gql_batch_response)?;
+    let gql_response = serde_json::to_string(&gql_batch_response)
+        .map_err(|e| actix_web::error::InternalError::new(
+            format!("error serializing response body: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))?;
     let mut response = match gql_batch_response.is_ok() {
         true => HttpResponse::Ok(),
         false => HttpResponse::BadRequest(),
@@ -217,22 +224,21 @@ pub async fn playground_handler(
 pub mod subscriptions {
     use std::{fmt, sync::Arc};
 
-    use actix::{prelude::*, Actor, StreamHandler};
+    use actix::{Actor, prelude::*, StreamHandler};
     use actix_web::{
         http::header::{HeaderName, HeaderValue},
-        web, HttpRequest, HttpResponse,
+        HttpRequest, HttpResponse, web,
     };
     use actix_web_actors::ws;
-
-    use tokio::sync::Mutex;
-
     use juniper::{
         futures::{
-            stream::{SplitSink, SplitStream, StreamExt},
             SinkExt,
+            stream::{SplitSink, SplitStream, StreamExt},
         },
         GraphQLSubscriptionType, GraphQLTypeAsync, RootNode, ScalarValue,
     };
+    use tokio::sync::Mutex;
+
     use juniper_graphql_ws::{ArcSchema, ClientMessage, Connection, Init, ServerMessage};
 
     /// Serves the graphql-ws protocol over a WebSocket connection.
@@ -474,12 +480,12 @@ pub mod subscriptions {
 
 #[cfg(test)]
 mod tests {
-    use actix_web::{dev::ServiceResponse, http, http::header::CONTENT_TYPE, test, App};
+    use actix_web::{App, dev::ServiceResponse, http, http::header::CONTENT_TYPE, test};
     use juniper::{
+        EmptyMutation,
+        EmptySubscription,
         futures::stream::StreamExt,
-        http::tests::{run_http_test_suite, HttpIntegration, TestResponse},
-        tests::fixtures::starwars::schema::{Database, Query},
-        EmptyMutation, EmptySubscription, RootNode,
+        http::tests::{HttpIntegration, run_http_test_suite, TestResponse}, RootNode, tests::fixtures::starwars::schema::{Database, Query},
     };
 
     use super::*;
@@ -768,13 +774,13 @@ mod tests {
 mod subscription_tests {
     use std::time::Duration;
 
-    use actix_web::{test, web, App, Error, HttpRequest, HttpResponse};
+    use actix_web::{App, Error, HttpRequest, HttpResponse, test, web};
     use actix_web_actors::ws;
     use juniper::{
+        EmptyMutation,
         futures::{SinkExt, StreamExt},
         http::tests::{run_ws_test_suite, WsIntegration, WsIntegrationMessage},
-        tests::fixtures::starwars::schema::{Database, Query, Subscription},
-        EmptyMutation, LocalBoxFuture,
+        LocalBoxFuture, tests::fixtures::starwars::schema::{Database, Query, Subscription},
     };
     use juniper_graphql_ws::ConnectionConfig;
     use tokio::time::timeout;
